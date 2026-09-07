@@ -292,6 +292,21 @@ async def answer_node_stream(state: AgentState, instructions_override=None):
 
       tcs = agg.finish()
       if not tcs:
+        # After tool execution the LLM sometimes streams a short transitional
+        # sentence with no tool calls ("let me first see what tools are
+        # available..."). That is NOT the final answer -- force another
+        # iteration with a stronger FINAL-ANSWER nudge so the model keeps
+        # going until it actually answers the user.
+        if executed_any and _step < max_steps - 1:
+          from langchain_core.messages import SystemMessage as _SM
+          msgs = msgs + [_SM(content=(
+            "Tool results are in the messages above. The previous response was "
+            "just transitional chatter. Produce the FINAL ANSWER to the user's "
+            "original question using those results. Do NOT call more tools. Do "
+            "NOT describe what you would do. Output the answer directly, keep "
+            "it concise and use [n] markers to cite the relevant sources."
+          ))]
+          continue
         full_text = agg.text
         break
       # 上游（MiniMax 2013）要求 assistant.tool_calls[].id 非空且与后续
