@@ -186,7 +186,7 @@ def _spawn(spec: MCPServerSpec, cwd: str | None) -> subprocess.Popen:
     except Exception:
       pass
 
-  t = threading.Thread(target=_drain_stderr, name=f"mcp-stderr-{spec.name}", daemon=True)
+  t = threading.Thread(target=_drain_stderr, name=f"mcp-stderr-{spec.server_id}", daemon=True)
   t.start()
   proc._stderr_thread = t
   return proc
