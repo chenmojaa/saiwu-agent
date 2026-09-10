@@ -21,6 +21,12 @@ English | [中文](README.zh.md)
 
 </div>
 
+<div align="center">
+
+![Saiwu Chat Interface](docs/screenshot-light.png)
+
+</div>
+
 ***
 
 ## Problems Solved

@@ -21,6 +21,12 @@
 
 </div>
 
+<div align="center">
+
+![Saiwu 聊天界面](docs/screenshot-light.png)
+
+</div>
+
 ***
 
 ## 解决了什么问题
