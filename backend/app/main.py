@@ -102,8 +102,10 @@ async def _require_auth(request: Request, call_next):
       token = token[7:].strip()
     if not token:
       token = (request.headers.get("x-auth-token") or "").strip()
+    if not token:
+      return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
     user_id = verify_token(token)
-    if user_id is None:
+    if not user_id:
       return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
     request.state.user_id = user_id
   return await call_next(request)
@@ -119,13 +121,17 @@ async def _mirror_api_key(request: Request, call_next):
   embedding work regardless of which domain the user opened the app from.
   """
   key = (request.headers.get("x-api-key") or "").strip()
+  base_url = (request.headers.get("x-base-url") or "").strip()
   if key:
+    request.state.api_key_override = key
     try:
       from app.storage import llm_config_store as _lcs
       if not _lcs.get_api_key():
         _lcs.update_config({"api_key": key})
     except Exception:
       pass
+  if base_url:
+    request.state.base_url_override = base_url
   return await call_next(request)
 
 app.include_router(health_router, prefix="/api")

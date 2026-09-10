@@ -152,7 +152,7 @@ def _spawn(spec: MCPServerSpec, cwd: str | None) -> subprocess.Popen:
       else:
         # Last resort: run through cmd /c so .cmd shims on PATH still work.
         argv = ["cmd", "/c", *argv]
-  return subprocess.Popen(
+  proc = subprocess.Popen(
     argv,
     cwd=cwd,
     env=full_env,
@@ -162,6 +162,34 @@ def _spawn(spec: MCPServerSpec, cwd: str | None) -> subprocess.Popen:
     bufsize=-1,
     creationflags=creationflags,
   )
+  # MCP stdio servers tend to write to stderr for noisy logs. If we leave the
+  # pipe full, the OS pipe buffer (~64 KiB on Windows / 64 KiB on POSIX) fills
+  # and the child blocks on its next stderr write -> deadlock. Drain in a
+  # background thread; only the most recent failure excerpt is retained for
+  # surfacing in error messages.
+  proc._stderr_tail: list[str] = []
+
+  def _drain_stderr():
+    if proc.stderr is None:
+      return
+    try:
+      for raw in proc.stderr:
+        try:
+          line = raw.decode("utf-8", errors="replace")
+        except Exception:
+          line = repr(raw)
+        proc._stderr_tail.append(line)
+        if len(proc._stderr_tail) > 50:
+          del proc._stderr_tail[:1]
+        if len(proc._stderr_tail) > 50:
+          del proc._stderr_tail[:1]
+    except Exception:
+      pass
+
+  t = threading.Thread(target=_drain_stderr, name=f"mcp-stderr-{spec.server_id}", daemon=True)
+  t.start()
+  proc._stderr_thread = t
+  return proc
 
 
 def _handshake(proc: subprocess.Popen, init_timeout: float) -> bool:

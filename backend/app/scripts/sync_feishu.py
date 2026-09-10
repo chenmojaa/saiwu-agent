@@ -1,4 +1,4 @@
-﻿"""One-shot Feishu sync trigger.
+"""One-shot Feishu sync trigger.
 
 The backend already runs a 15-minute background loop. This script lets the
 user fire a single on-demand cycle from the UI without waiting for the next
@@ -30,12 +30,12 @@ def main():
         _emit("done", processed=0, skipped=0, reason="feishu disabled")
         return 0
     try:
-        from app.integrations.feishu_sync import sync_once
+        from app.feishu_sync import sync_all
     except Exception as e:
         _emit("error", detail="feishu_sync import failed: " + str(e)[:200])
         return 1
     try:
-        result = sync_once()
+        result = sync_all()
         _emit("done", **result)
     except Exception as e:
         _emit("error", detail=str(e)[:300])

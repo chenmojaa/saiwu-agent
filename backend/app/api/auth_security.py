@@ -249,39 +249,37 @@ def export_user_data(user_id: int) -> dict:
 
 
 def delete_user_data(user_id: int) -> int:
-    """Wipe all rows tied to this user. Returns the number of rows removed."""
+    """Wipe all rows tied to this user. Returns the number of rows removed.
+
+    Raises on partial failure so the caller can return a 5xx instead of
+    silently lying that the account is gone.
+    """
+    from app.storage.vector import delete_note_chunks
     removed = 0
-    try:
-        with get_engine().begin() as conn:
-            # Chat history
-            r = conn.execute(text("DELETE FROM chat_messages"))
+    with get_engine().begin() as conn:
+        # Collect note ids before we drop the notes table.
+        with Session(get_engine()) as s:
+            note_ids = [n.id for n in s.exec(select(Note)).all()]
+        for nid in note_ids:
+            try:
+                delete_note_chunks(nid)
+            except Exception as e:
+                _log.warning("vector delete for %s failed: %s", nid, e)
+        for tbl in (
+            "chat_messages",
+            "chat_sessions",
+            "memory_facts",
+            "user_profiles",
+            "mcp_call_log",
+            "revoked_tokens",
+        ):
+            r = conn.execute(text(f"DELETE FROM {tbl}"))
             removed += r.rowcount or 0
-            r = conn.execute(text("DELETE FROM chat_sessions"))
-            removed += r.rowcount or 0
-            # Knowledge base + vector store
-            from app.storage.vector import delete_note_chunks
-            with Session(get_engine()) as s:
-                note_ids = [n.id for n in s.exec(select(Note)).all()]
-            for nid in note_ids:
-                try:
-                    delete_note_chunks(nid)
-                except Exception:
-                    pass
-            r = conn.execute(text("DELETE FROM notes"))
-            removed += r.rowcount or 0
-            # Memory + profile + MCP logs + revoked tokens
-            r = conn.execute(text("DELETE FROM memory_facts"))
-            removed += r.rowcount or 0
-            r = conn.execute(text("DELETE FROM user_profiles"))
-            removed += r.rowcount or 0
-            r = conn.execute(text("DELETE FROM mcp_call_log"))
-            removed += r.rowcount or 0
-            r = conn.execute(text("DELETE FROM revoked_tokens"))
-            removed += r.rowcount or 0
-            r = conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
-            removed += r.rowcount or 0
-    except Exception as e:
-        _log.warning("delete_user_data failed: %s", e)
+        # notes last (after vector) so partial failure is recoverable.
+        r = conn.execute(text("DELETE FROM notes"))
+        removed += r.rowcount or 0
+        r = conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+        removed += r.rowcount or 0
     return removed
 
 

@@ -1,4 +1,4 @@
-﻿"""LangChain tool wrappers around locally installed agent skills.
+"""LangChain tool wrappers around locally installed agent skills.
 
 Each installed skill (``backend/data/skills/installed/<id>/SKILL.md``) is exposed
 as a `StructuredTool` so the model can load its instructions on demand. We do
@@ -15,6 +15,7 @@ We intentionally do NOT execute skill scripts inside the agent loop unless the
 user explicitly asks for it (that becomes a separate explicit endpoint).
 """
 from __future__ import annotations
+import re
 
 import logging
 from pathlib import Path
@@ -34,14 +35,25 @@ def _skills_root() -> Path:
 
 def _read_skill(skill_id: str, max_chars: int = 8000) -> str | None:
   """Return SKILL.md body, trimmed. ``None`` if not found or too large."""
+  # Defense-in-depth: re-validate even though the Pydantic schema already
+  # restricts skill_id. A direct caller (e.g. internal code, future API)
+  # cannot pass a path separator or absolute path here.
+  if not re.match(_SKILL_ID_RE, skill_id or ""):
+    _log.warning("skill id %r rejected: not a valid slug", skill_id)
+    return None
+  installed_ids = {it.get("id") for it in _list_installed_skills()}
+  if installed_ids and skill_id not in installed_ids:
+    return None
   skill_root = _skills_root()
-  # Prefer <id>/SKILL.md, fall back to search.
-  candidate = skill_root / skill_id / "SKILL.md"
-  if not candidate.exists():
-    matches = list(skill_root.glob("%s/SKILL.md" % skill_id))
-    if not matches:
-      return None
-    candidate = matches[0]
+  candidate = (skill_root / skill_id / "SKILL.md").resolve()
+  # Make sure we never escape skill_root via a symlink or weird slug.
+  try:
+    candidate.relative_to(skill_root.resolve())
+  except ValueError:
+    _log.warning("skill %s resolved outside skill_root", skill_id)
+    return None
+  if not candidate.exists() or not candidate.is_file():
+    return None
   try:
     text = candidate.read_text(encoding="utf-8")
   except OSError as e:
@@ -66,13 +78,28 @@ def _list_installed_skills() -> list[dict]:
   return [it for it in items if isinstance(it, dict) and isinstance(it.get("id"), str)]
 
 
+# Skill ids are short slugs that match an installed.json entry. Constrain at
+# the schema level so the LLM cannot inject path separators, traversal, or
+# arbitrarily long task strings that would otherwise be passed to filesystem ops.
+_SKILL_ID_RE = r"^[a-z0-9][a-z0-9_.-]{0,63}$"
+
+
 class _LoadSkillInput(BaseModel):
-  skill_id: str = Field(description="The id of the installed skill, e.g. ``docx``.")
+  skill_id: str = Field(
+    pattern=_SKILL_ID_RE,
+    description="The id of the installed skill, e.g. ``docx``. Must be a slug; no path separators.",
+  )
 
 
 class _InvokeSkillInput(BaseModel):
-  skill_id: str = Field(description="The id of the installed skill to invoke.")
-  task: str = Field(description="What you want the skill to help with. The skill's instructions will be returned alongside your task so you can follow them.")
+  skill_id: str = Field(
+    pattern=_SKILL_ID_RE,
+    description="The id of the installed skill to invoke. Must be a slug; no path separators.",
+  )
+  task: str = Field(
+    max_length=2000,
+    description="What you want the skill to help with. The skill's instructions will be returned alongside your task so you can follow them.",
+  )
 
 
 def build_skill_tools() -> list[StructuredTool]:

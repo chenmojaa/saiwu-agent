@@ -32,6 +32,7 @@ Intent = Literal["chat", "research", "ingest", "report"]
 _FAST_CHAT_PATTERNS = re.compile(
     r"^(你好|hi|hello|嗨|喂|在吗|在么|早啊|早|早上好|下午好|晚上好|晚安"
     r"|谢谢|多谢|感谢|thanks|thank you|thx"
+    r"|搜一下|搜索|查找|查一下|查查|查询|找一下|看看|搜搜"
     r"|再见|拜拜|bye|goodbye|回头见|回见"
     r"|你是谁|你是谁？|你叫什么|介绍一下自己|你能做什么|你有什么功能|what can you do|who are you"
     r"|你是谁\?|你是谁？"

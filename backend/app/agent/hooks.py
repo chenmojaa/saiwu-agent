@@ -180,7 +180,9 @@ def _run_one(spec: HookSpec, event: dict) -> HookRunResult:
             input=json.dumps({"event": event, "phase": spec.phase, "tool": event.get("tool")}, ensure_ascii=False),
             capture_output=True,
             text=True,
-            timeout=max(0.5, spec.timeout_s),
+            # Bounded hook execution: floor 0.5s, ceiling 30s. A
+            # misconfigured /user/ hook must never wedge the agent.
+            timeout=max(0.5, min(30.0, spec.timeout_s)),
         )
         result.duration_ms = int((time.monotonic() - started) * 1000)
         result.stdout = (proc.stdout or "").strip()
@@ -210,13 +212,23 @@ def _run_one(spec: HookSpec, event: dict) -> HookRunResult:
 
 
 def fire(phase: str, event: dict) -> list[HookRunResult]:
-    """Fire all matching hooks for the given phase. Never raises."""
+    """Fire all matching hooks for the given phase. Never raises.
+
+    ``_last_run`` is a module-level dict shared across all threads and the
+    API surface (``last_runs``). Concurrent ``fire`` calls on the same hook
+    name would otherwise race on the dict write AND ``last_runs`` could see
+    ``RuntimeError: dictionary changed size during iteration``. Guard both
+    the read and write paths with the existing ``_lock``.
+    """
     out: list[HookRunResult] = []
     tool_name = event.get("tool") or "*"
     for spec in _specs_for(phase, tool_name):
         r = _run_one(spec, event)
         out.append(r)
-        _last_run[spec.name] = asdict(r)
+        # Atomic update: snapshot dataclass under the lock so concurrent
+        # ``last_runs()`` callers cannot observe a half-built dict.
+        with _lock:
+            _last_run[spec.name] = asdict(r)
     return out
 
 
@@ -229,7 +241,11 @@ def is_blocked(results: list[HookRunResult]) -> tuple[bool, str]:
 
 
 def last_runs() -> list[dict]:
-    return list(_last_run.values())
+    """Snapshot of the last-run registry. Safe under concurrent ``fire()``."""
+    with _lock:
+        # Materialize values under the lock so the returned list cannot
+        # mutate out from under the caller if ``fire()`` writes concurrently.
+        return [dict(v) for v in _last_run.values()]
 
 
 __all__ = [

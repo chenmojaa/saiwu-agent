@@ -1,4 +1,4 @@
-﻿"""Sub-agent profiles (Codex CLI / Claude Code parity).
+"""Sub-agent profiles (Codex CLI / Claude Code parity).
 
 A sub-agent is a specialised LLM run spawned from the main chat. Each profile
 defines its own system prompt + the tools it is allowed to see:
@@ -88,7 +88,15 @@ def _filter_tools_for_mode(all_tool_names: list[str], mode: str) -> list[str]:
     for planning. General: pass everything through.
     """
     if mode == "general":
-        return all_tool_names
+        # Defense in depth: sub-agents never run user code through destructive
+        # tools directly. They produce a plan, the orchestrator applies it via
+        # the regular tool loop where the user-approved permission modal gates
+        # every invocation.
+        blocked_general = {
+            "mcp:fs:fs_write", "mcp:fs:fs_delete", "mcp:fs:fs_mkdir",
+            "ingest_url", "ingest_text", "ingest_file", "delete_note",
+        }
+        return [n for n in all_tool_names if n not in blocked_general]
     blocked_explore = {
         "mcp:fs:fs_write", "mcp:fs:fs_delete", "mcp:fs:fs_mkdir",
         "ingest_url", "ingest_text", "ingest_file", "delete_note",

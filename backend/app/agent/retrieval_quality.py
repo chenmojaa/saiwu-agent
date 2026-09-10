@@ -37,20 +37,29 @@ def _strip_think(text):
     return _THINK_RE.sub("", text).strip()
 
 
-def _cheap_model():
+def _cheap_model(api_key=None, base_url=None):
+    """Build the router-quality model used for query expansion / rerank.
+
+    Per-request ``api_key`` / ``base_url`` take precedence so callers can use
+    their own provider creds for expansion + rerank instead of being silently
+    pinned to ``settings.router_*`` (which the user may have set to a different
+    provider entirely). Falls back to global settings when the caller did not
+    supply overrides.
+    """
     from app.llm.factory import _build_model
     return _build_model(
         provider=None,
         model=settings.router_model or None,
-        base_url=settings.router_base_url or None,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 
-def expand_query(query, max_variants=3):
+def expand_query(query, max_variants=3, *, api_key=None, base_url=None):
     if not query or len(query.strip()) < 4:
         return [query]
     try:
-        model = _cheap_model()
+        model = _cheap_model(api_key=api_key, base_url=base_url)
         prompt = _EXPANSION_PROMPT.replace("<<QUERY>>", query.strip())
         resp = model.invoke(prompt)
         content = getattr(resp, "content", "") or ""
@@ -76,7 +85,7 @@ def expand_query(query, max_variants=3):
         return [query]
 
 
-def rerank(query, hits, top_n=None):
+def rerank(query, hits, top_n=None, *, api_key=None, base_url=None):
     if not hits:
         return hits
     try:
@@ -90,7 +99,7 @@ def rerank(query, hits, top_n=None):
             cid = "%s#%s" % (h.get('note_id','?'), h.get('chunk_index','?'))
             lines.append("[%d] id=%s text=%s" % (i, cid, snippet))
         prompt = _RERANK_PROMPT.replace("<<QUERY>>", query).replace("<<CANDIDATES>>", chr(10).join(lines))
-        model = _cheap_model()
+        model = _cheap_model(api_key=api_key, base_url=base_url)
         resp = model.invoke(prompt)
         content = getattr(resp, "content", "") or ""
         if isinstance(content, list):

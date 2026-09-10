@@ -76,6 +76,17 @@ def _build_messages(state: AgentState):
   ]
   tools = load_tools() if settings.tools_enabled else []
   inventory = inventory_text() if settings.tools_enabled else ""
+  # Sub-agent mode gets a restricted tool palette. The general profile
+  # keeps every tool; explore/plan shed obviously-mutating tools so the
+  # helper cannot accidentally fs_write / delete a note while summarising.
+  subagent_mode = state.get("subagent_mode")
+  if subagent_mode and tools:
+    try:
+      from app.agent.subagents import _filter_tools_for_mode
+      allowed = set(_filter_tools_for_mode([t.name for t in tools], subagent_mode))
+      tools = [t for t in tools if t.name in allowed]
+    except Exception:
+      pass
   msgs = build_messages(
     # Read per-request (mtime-cached) so config.yaml prompt edits hot-reload
     # without a backend restart; a module-level constant froze the YAML.
@@ -261,7 +272,7 @@ async def answer_node_stream(state: AgentState, instructions_override=None):
   from app.agent.tools import permissions as _perm
   perm_mode = (state.get("agent_permission") or "default").lower()
   _mcp_tools.set_permission_mode(perm_mode)
-  turn_approved = False  # 一轮内批准过一次后续不再重复询问
+  turn_approved_targets: set[str] = set()  # 同一目标已批准过则不再询问
 
   if tools and settings.tools_enabled:
     from langchain_core.messages import ToolMessage
@@ -281,6 +292,21 @@ async def answer_node_stream(state: AgentState, instructions_override=None):
 
       tcs = agg.finish()
       if not tcs:
+        # After tool execution the LLM sometimes streams a short transitional
+        # sentence with no tool calls ("let me first see what tools are
+        # available..."). That is NOT the final answer -- force another
+        # iteration with a stronger FINAL-ANSWER nudge so the model keeps
+        # going until it actually answers the user.
+        if executed_any and _step < max_steps - 1:
+          from langchain_core.messages import SystemMessage as _SM
+          msgs = msgs + [_SM(content=(
+            "Tool results are in the messages above. The previous response was "
+            "just transitional chatter. Produce the FINAL ANSWER to the user's "
+            "original question using those results. Do NOT call more tools. Do "
+            "NOT describe what you would do. Output the answer directly, keep "
+            "it concise and use [n] markers to cite the relevant sources."
+          ))]
+          continue
         full_text = agg.text
         break
       # 上游（MiniMax 2013）要求 assistant.tool_calls[].id 非空且与后续
@@ -308,7 +334,7 @@ async def answer_node_stream(state: AgentState, instructions_override=None):
         # 先经用户批准：yield permission_request -> 前端弹窗 -> POST 决定。
         denied_by_permission = False
         if (perm_mode != "full" and name == "mcp_invoke" and tool is not None
-                and not turn_approved):
+                and tool.get("server") not in turn_approved_targets):
           req_id, _fut = _perm.create_request()
           yield ("permission_request", {
             "request_id": req_id,
@@ -318,7 +344,11 @@ async def answer_node_stream(state: AgentState, instructions_override=None):
           approved = await _perm.wait_decision(req_id)
           yield ("permission_result", {"request_id": req_id, "approved": approved})
           if approved:
-            turn_approved = True
+            # Per-target broker: record this exact server so
+            # subsequent same-server calls in this turn skip the modal.
+            srv = (tool.get('server') or '') if tool else ''
+            if srv:
+                turn_approved_targets.add(srv)
             # 把本次请求涉及的盘符根加入授权范围（后续同轮调用不再被
             # filesystem server 的 allowed-dirs 拦截）
             args = args if isinstance(args, dict) else {}

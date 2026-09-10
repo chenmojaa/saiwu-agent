@@ -37,8 +37,14 @@ def _resolve_key(api_key):
   return (settings.embedding_api_key or settings.llm_api_key or _lcs.get_api_key() or "").strip()
 
 
-def _resolve_model(model):
-  return (model or settings.embedding_model or "").strip()
+def _resolve_model(model, base_url=None):
+  m = (model or settings.embedding_model or "").strip()
+  # MiniMax native endpoint speaks its own embedding model, not OpenAI's.
+  # If the caller didn't pin one and we're pointed at minimax, fall back
+  # to embo-01 instead of "text-embedding-3-small" (which 2013s upstream).
+  if not model and base_url and "minimax" in base_url.lower() and m.startswith("text-embedding"):
+    return "embo-01"
+  return m
 
 
 def _parse_embedding_response(j):
@@ -148,15 +154,15 @@ def embed_texts(texts, api_key=None, base_url=None, model=None, mode="db"):
   if not cleaned:
     return []
 
+  url = _resolve_url(base_url)
   key = _resolve_key(api_key)
   if not key:
     raise RuntimeError("No embedding API key configured (set EMBEDDING_API_KEY or pass api_key=)")
 
-  m = _resolve_model(model)
+  m = _resolve_model(model, url)
   if not m:
     raise RuntimeError("No embedding model configured (set EMBEDDING_MODEL or pass model=)")
 
-  url = _resolve_url(base_url)
   headers = {
     "Authorization": f"Bearer {key}",
     "Content-Type": "application/json",

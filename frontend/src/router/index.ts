@@ -10,13 +10,24 @@ function clearToken(): void {
   try { localStorage.removeItem(TOKEN_KEY) } catch {}
 }
 
-/** 本地快速检查：token 格式为 `userId.exp.sig`，先看是否已过期（毫秒级） */
+/** 本地快速检查：token 格式 `userId.token_version.exp.sig`（4 段），
+ * 先看是否已过期（毫秒级）。
+ *
+ * 历史：旧格式是 3 段 `userId.exp.sig`。服务器自 token_version 引入以来
+ * 一直拒绝 3 段 token（验证会返回 None），所以这里也直接拒绝 3 段，
+ * 避免把 "服务器会拒" 的 token 误判为本地有效导致用户卡在登录页。
+ */
 function isTokenLocallyValid(token: string | null): boolean {
   if (!token) return false
   const parts = token.split('.')
-  if (parts.length !== 3) return false
-  const exp = Number(parts[1])
-  return Number.isFinite(exp) && Date.now() < exp * 1000
+  if (parts.length === 4) {
+    // New format: userId.token_version.exp.sig -- exp is at index 2.
+    const exp = Number(parts[2])
+    return Number.isFinite(exp) && Date.now() < exp * 1000
+  }
+  // Any other shape (including legacy 3-segment) is rejected locally;
+  // the server-side verify_token() in app/api/auth.py rejects them too.
+  return false
 }
 
 // 每次页面加载只做一次服务端校验，结果缓存在内存中（导航不重复请求）

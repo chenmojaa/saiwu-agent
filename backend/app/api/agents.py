@@ -1,4 +1,4 @@
-﻿"""Sub-agent routes.
+"""Sub-agent routes.
 
 POST /api/agents/run             -> SSE stream of one sub-agent run.
 POST /api/agents/plan-suggest    -> one-shot call to the "plan" sub-agent

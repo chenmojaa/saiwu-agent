@@ -1,4 +1,4 @@
-﻿"""Recompute embeddings for every note in the knowledge base (CLI entry).
+"""Recompute embeddings for every note in the knowledge base (CLI entry).
 
 Lightweight offline-equivalent of the agent's online ingest path: walk all
 notes, re-vectorise them into the shared Chroma collection. Designed to be
@@ -36,31 +36,51 @@ def _emit(line: str) -> None:
 def reindex_notes(scope: str = "all", root: str | None = None) -> None:
     from app.storage import db
     started = time.monotonic()
-    if hasattr(db, "list_all_notes"):
-        notes = db.list_all_notes() or []
-    else:
-        notes = []
+    notes = (db.list_all_notes() if hasattr(db, "list_all_notes") else []) or []
     total = len(notes)
     _emit(f"[start] scope={scope} total={total} root={root or '-'}")
+    # Lazy imports so the script can be --help-ed without LLM deps installed.
+    try:
+        from app.config import settings
+    except Exception as e:
+        _emit(f"[fatal] cannot load settings: {e}")
+        return
     if total == 0:
+        _emit(f"[config] embedding_model={settings.embedding_model}")
+        _emit("[done] elapsed_s=0 processed=0")
+        return
+    # Use the online ingest path: chunk + embed + add to chroma. This keeps
+    # the offline CLI behaviour identical to what /api/chat would do.
+    try:
+        from app.tools.ingest import ingest_text_into_chroma
+        from app.tools.chunk import chunk_text
+    except Exception as e:
+        _emit(f"[fatal] ingest pipeline unavailable: {e}")
+        return
+    ok = failed = 0
+    for i, n in enumerate(notes, 1):
+        nid = getattr(n, "id", None)
+        body = (getattr(n, "text", None) or getattr(n, "content", None) or "")
+        if not nid or not body:
+            failed += 1
+            _emit(f"[warn] {i}/{total} {nid}: empty body")
+            continue
         try:
-            from app.config import settings
-            _emit(f"[config] embedding_model={settings.embedding_model} dim={getattr(settings, 'embedding_dim', 1536)}")
+            chunks = chunk_text(body)
+            ingest_text_into_chroma(
+                note_id=nid,
+                chunks=chunks,
+                title=getattr(n, "title", None) or "",
+                source_url=getattr(n, "source_url", None),
+            )
+            ok += 1
         except Exception as e:
-            _emit(f"[config] failed to load settings: {e}")
-    else:
-        ok = 0
-        for i, n in enumerate(notes, 1):
-            try:
-                if hasattr(db, "touch_note") and getattr(n, "id", None):
-                    db.touch_note(n.id)
-                ok += 1
-            except Exception as e:
-                _emit(f"[warn] {getattr(n, 'id', None) or i}: {e}")
-            if i % 10 == 0 or i == total:
-                _emit(f"[progress] {i}/{total} ok={ok}")
+            failed += 1
+            _emit(f"[warn] {nid}: {type(e).__name__}: {e}")
+        if i % 5 == 0 or i == total:
+            _emit(f"[progress] {i}/{total} ok={ok} failed={failed}")
     elapsed = int(time.monotonic() - started)
-    _emit(f"[done] elapsed_s={elapsed} processed={total}")
+    _emit(f"[done] elapsed_s={elapsed} processed={ok} failed={failed}")
 
 
 def main() -> int:

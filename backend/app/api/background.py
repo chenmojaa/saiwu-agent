@@ -1,4 +1,4 @@
-﻿"""Background-task routes (long-running jobs that don't block the UI).
+"""Background-task routes (long-running jobs that don't block the UI).
 
 Codex CLI / Claude Code both support "background agent" tasks that run in a
 sandbox without blocking the chat UI. We expose two routes:
@@ -72,6 +72,10 @@ async def _produce(cmd: list[str], job_id: str, q: "asyncio.Queue[str]") -> None
         stderr=asyncio.subprocess.STDOUT,
         cwd=os.getcwd(),
     )
+    # Stash the handle on the queue object so the SSE generator can
+    # terminate the child if the user abandons the stream or the wall-clock
+    # deadline fires. Without this the subprocess leaks on every timeout.
+    q.__proc = proc  # type: ignore[attr-defined]
     started = time.monotonic()
     await q.put(json.dumps({"phase": "started", "job_id": job_id, "pid": proc.pid}))
     if proc.stdout is not None:
@@ -142,6 +146,12 @@ def _spawn_job(kind, cmd, total=0):
       while True:
         if time.time() > t_end:
           yield _emit(json.dumps({"phase": "error", "job_id": job_id, "detail": "timeout"}))
+          # Best-effort: kill the leaked child so the background kind does
+          # not run forever after the client disconnects.
+          proc = getattr(q, "_proc", None)
+          if proc is not None and proc.returncode is None:
+            try: proc.kill()
+            except Exception: pass
           break
         try:
           raw = loop.run_until_complete(asyncio.wait_for(q.get(), timeout=1.0))

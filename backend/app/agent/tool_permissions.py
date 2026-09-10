@@ -1,4 +1,4 @@
-﻿"""Per-tool permission rules (Codex CLI / Claude Code parity).
+"""Per-tool permission rules (Codex CLI / Claude Code parity).
 
 A rule is a triple (tool_name, decision, source) where:
   * tool_name -> a tool identifier from app/agent/tools/inventory (e.g.
@@ -32,10 +32,16 @@ DATA_PERMS_FILENAME = "permissions.json"
 # Tools that mutate user-visible state by default require explicit approval
 # ("ask"). Read-only tools are "allow". Pure-overhead tools (mcp_discover) are
 # "allow" so the agent can find its own capabilities.
+#
+# NOTE: do NOT add a bare "mcp_invoke" key here. The runtime permission check
+# in mcp_tools.py uses the three-segment form "mcp:<server>:<tool>" (see
+# mcp_tools.is_tool_allowed invocation). The agent-layer alias "mcp_invoke"
+# is gated by the permission broker in app/agent/tools/permissions.py before
+# it reaches this layer, so listing it here would either be dead code or, worse,
+# mislead the operator into believing a broad allow was in effect.
 _DEFAULT_RULES: dict[str, str] = {
   "hybrid_search": "allow",
   "mcp_discover_tools": "allow",
-  "mcp_invoke": "allow",  # fine-grained handled by the permission broker
   "mcp:fs:fs_read": "allow",
   "mcp:fs:fs_ls": "allow",
   "mcp:fs:fs_write": "ask",

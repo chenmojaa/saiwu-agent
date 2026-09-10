@@ -108,7 +108,7 @@ def _check_duplicate(title: str, summary: str) -> int | None:
     # in our score-to-similarity mapping; treat < 0.05 as strong match). We use the
     # raw score here as a soft signal only; frontend will surface the warning.
     best = rows[0]
-    return int(best.get("note_id")) if best.get("note_id") else None
+    return best.get("note_id") or "" if best.get("note_id") else None
 
 
 def _update_note_meta(note_id: str, meta: IngestMeta) -> None:

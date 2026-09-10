@@ -75,6 +75,7 @@ class User(SQLModel, table=True):
   phone: str = Field(unique=True, index=True)
   password_salt: str
   password_hash: str
+  token_version: int = Field(default=0)
   created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -93,6 +94,7 @@ def get_engine():
     SQLModel.metadata.create_all(_engine)
     _init_fts(_engine)
     _migrate_notes(_engine)
+    _migrate_token_version(_engine)
   return _engine
 
 
@@ -128,6 +130,26 @@ def _migrate_notes(engine):
         msg = str(e).lower()
         if "duplicate column" not in msg and "already exists" not in msg:
           raise
+
+def _migrate_token_version(engine):
+  """Idempotent column add for users.token_version.
+
+  The User model has carried ``token_version`` since the password-
+  rotation fix, but get_engine() calls this before any SELECT hits the
+  users table, so a missing function (or a missing column on an old DB)
+  surfaced as 500 "no such column: users.token_version" on /api/auth/
+  login. ALTER TABLE ADD COLUMN ... DEFAULT 0 is safe to re-run: the
+  "duplicate column" / "already exists" path is swallowed the same way
+  as _migrate_notes above.
+  """
+  statement = "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"
+  with engine.begin() as conn:
+    try:
+      conn.execute(text(statement))
+    except Exception as e:
+      msg = str(e).lower()
+      if "duplicate column" not in msg and "already exists" not in msg:
+        raise
 
 
 def get_session() -> Session:
@@ -612,6 +634,8 @@ def recall_facts(query: str, limit: int = 8) -> list[str]:
   out = (relevant[:limit] + recent[:half])[:limit]
   return out
 # === MCP call history (cross-session visibility) ===
+
+
 class MCPCallLog(SQLModel, table=True):
   __tablename__ = "mcp_call_log"
   id: Optional[int] = Field(default=None, primary_key=True)
