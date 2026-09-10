@@ -321,6 +321,12 @@ function repairMermaidSource(src: string): string {
 }
 
 async function renderMermaidIn(root: HTMLElement): Promise<void> {
+  // 流式时序根修：marked 会把未闭合的 ```mermaid 围栏当作完整代码块交给
+  // 自定义 renderer，半截源码进 mermaid.render 必然解析失败。围栏数量为
+  // 奇数说明最后一个代码块还没闭合（正在流式输出），这一拍跳过渲染，
+  // 等闭合后再画——既省掉大量无效渲染，也不再产生错误占位 SVG。
+  const fenceCount = (bodyNoCite.value.match(/```/g) || []).length
+  if (fenceCount % 2 === 1) return
   const blocks = Array.from(root.querySelectorAll<HTMLElement>('.mermaid-block:not([data-rendered])'))
   for (const block of blocks) {
     const source = decodeURIComponent(block.getAttribute('data-source') || block.textContent || '')
@@ -360,10 +366,18 @@ async function renderMermaidIn(root: HTMLElement): Promise<void> {
   }
 }
 
+// mermaid.render 解析失败时会把错误占位 SVG（炸弹）留在 document.body 末尾
+// 的临时容器（id 形如 dmmd-xxxx）里，调用方 catch 之后它们也不会被清理——
+// 这就是「滚动到页面底部才成片看到炸弹」的来源。主动扫掉这些孤儿容器。
+function sweepMermaidErrorContainers(): void {
+  document.body.querySelectorAll(':scope > [id^="dmmd-"]').forEach((el) => el.remove())
+}
+
 async function refreshMermaid(): Promise<void> {
   await ensureMermaid()
   await nextTick()
   if (bubbleEl.value) await renderMermaidIn(bubbleEl.value)
+  sweepMermaidErrorContainers()
 }
 
 onMounted(() => {
